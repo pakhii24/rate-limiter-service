@@ -61,5 +61,18 @@ GET  /rules      - List all rules
 POST /rules      - Create a rule
 GET  /logs       - View request logs
 GET  /health     - Health check
+## What I'd Do Differently at Scale
+
+**Multiple uvicorn workers**: Currently running single process. At scale: `uvicorn app.main:app --workers 4` to utilize all CPU cores.
+
+**Dedicated Redis instance**: Redis is on the same box as the app. At scale: AWS ElastiCache (managed Redis) — separate machine, no resource contention.
+
+**Redis Cluster for horizontal scaling**: Single Redis becomes a bottleneck above ~100k RPS. Redis Cluster shards keys across nodes. Rate limit keys shard naturally by user_id.
+
+**Replace polling logs with WebSocket**: Done — dashboard now uses WebSocket for real-time metrics.
+
+**Sliding window memory cost**: Each request stores one sorted set entry. At 1M requests/minute, that's significant memory. Fix: switch high-traffic endpoints to fixed window counter (less accurate but O(1) memory).
+
+**Database connection pooling**: PgBouncer in front of Postgres to handle connection spikes without exhausting the Postgres connection limit.
 ## Live Demo
 Backend: http://3.109.152.24:8000/docs
