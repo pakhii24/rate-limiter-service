@@ -1,4 +1,5 @@
 import time
+import uuid
 import redis.asyncio as redis
 
 async def is_allowed_sliding_window(
@@ -16,11 +17,13 @@ async def is_allowed_sliding_window(
     pipe.expire(key, window_seconds * 2)
     results = await pipe.execute()
 
-    request_count = results[1]  # count BEFORE adding this request
+    request_count = results[1]
 
     if request_count < limit:
-        # Only add to the set if allowed
-        await r.zadd(key, {str(now): now})
+        # Use unique member key — fixes collision when two requests
+        # arrive at the exact same millisecond
+        member = f"{now}:{uuid.uuid4()}"
+        await r.zadd(key, {member: now})
         allowed = True
         remaining = limit - request_count - 1
         retry_after = 0

@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts"
 import axios from "axios"
 
 const API = "http://localhost:8000"
+const WS = "ws://3.109.152.24:8000/ws/metrics"
 
 function StatCard({ label, value, sub, color }) {
   return (
@@ -42,21 +43,52 @@ export default function App() {
   const [logs, setLogs] = useState([])
   const [rules, setRules] = useState([])
   const [chartData, setChartData] = useState([])
+  const [wsStatus, setWsStatus] = useState("connecting")
+  const [liveMetrics, setLiveMetrics] = useState({ total: 0, allowed: 0, blocked: 0 })
   const [newRule, setNewRule] = useState({ endpoint: "", algorithm: "sliding_window", limit: 60, window_seconds: 60 })
   const [tab, setTab] = useState("overview")
+  const wsRef = useRef(null)
+
+  // WebSocket for live metrics
+  useEffect(() => {
+    function connect() {
+      const ws = new WebSocket(WS)
+      wsRef.current = ws
+
+      ws.onopen = () => setWsStatus("live")
+
+      ws.onmessage = (e) => {
+        const data = JSON.parse(e.data)
+        setLiveMetrics(data)
+        setChartData(prev => {
+          const point = {
+            time: new Date().toLocaleTimeString(),
+            allowed: data.allowed,
+            blocked: data.blocked
+          }
+          return [...prev.slice(-20), point]
+        })
+      }
+
+      ws.onclose = () => {
+        setWsStatus("reconnecting")
+        setTimeout(connect, 2000)
+      }
+
+      ws.onerror = () => {
+        setWsStatus("error")
+        ws.close()
+      }
+    }
+
+    connect()
+    return () => wsRef.current?.close()
+  }, [])
 
   const fetchLogs = useCallback(async () => {
     try {
       const res = await axios.get(`${API}/logs?limit=50`)
-      const data = res.data.logs
-      setLogs(data)
-
-      const allowed = data.filter(l => l.allowed).length
-      const blocked = data.filter(l => !l.allowed).length
-      setChartData(prev => {
-        const point = { time: new Date().toLocaleTimeString(), allowed, blocked }
-        return [...prev.slice(-20), point]
-      })
+      setLogs(res.data.logs)
     } catch (e) { console.error(e) }
   }, [])
 
@@ -70,7 +102,7 @@ export default function App() {
   useEffect(() => {
     fetchLogs()
     fetchRules()
-    const interval = setInterval(fetchLogs, 3000)
+    const interval = setInterval(fetchLogs, 5000)
     return () => clearInterval(interval)
   }, [fetchLogs, fetchRules])
 
@@ -82,9 +114,9 @@ export default function App() {
     } catch (e) { console.error(e) }
   }
 
-  const totalAllowed = logs.filter(l => l.allowed).length
-  const totalBlocked = logs.filter(l => !l.allowed).length
-  const blockRate = logs.length ? ((totalBlocked / logs.length) * 100).toFixed(1) : 0
+  const blockRate = liveMetrics.total ? ((liveMetrics.blocked / liveMetrics.total) * 100).toFixed(1) : 0
+
+  const wsColor = wsStatus === "live" ? "#4ade80" : wsStatus === "reconnecting" ? "#fbbf24" : "#f87171"
 
   const tabStyle = (t) => ({
     padding: "8px 20px", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: 500,
@@ -94,16 +126,16 @@ export default function App() {
 
   return (
     <div style={{ background: "#0a0a0a", minHeight: "100vh", color: "#fff", fontFamily: "monospace" }}>
-      {/* Header */}
       <div style={{ borderBottom: "1px solid #1a1a1a", padding: "16px 32px", display: "flex", alignItems: "center", gap: 16 }}>
-        <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#4ade80" }} />
+        <div style={{ width: 8, height: 8, borderRadius: "50%", background: wsColor }} />
         <span style={{ fontWeight: 700, fontSize: 16 }}>Rate Limiter</span>
         <span style={{ color: "#333", fontSize: 12 }}>— admin dashboard</span>
-        <div style={{ marginLeft: "auto", color: "#333", fontSize: 11 }}>auto-refresh 3s</div>
+        <div style={{ marginLeft: "auto", color: wsColor, fontSize: 11 }}>
+          ● {wsStatus === "live" ? "websocket live" : wsStatus}
+        </div>
       </div>
 
       <div style={{ padding: "24px 32px" }}>
-        {/* Tabs */}
         <div style={{ display: "flex", gap: 4, marginBottom: 24 }}>
           <button style={tabStyle("overview")} onClick={() => setTab("overview")}>Overview</button>
           <button style={tabStyle("logs")} onClick={() => setTab("logs")}>Request logs</button>
@@ -112,18 +144,16 @@ export default function App() {
 
         {tab === "overview" && (
           <>
-            {/* Stat cards */}
             <div style={{ display: "flex", gap: 16, marginBottom: 32, flexWrap: "wrap" }}>
-              <StatCard label="Total requests" value={logs.length} color="#7dd3fc" />
-              <StatCard label="Allowed" value={totalAllowed} color="#4ade80" />
-              <StatCard label="Blocked" value={totalBlocked} color="#f87171" />
+              <StatCard label="Total requests" value={liveMetrics.total} color="#7dd3fc" />
+              <StatCard label="Allowed" value={liveMetrics.allowed} color="#4ade80" />
+              <StatCard label="Blocked" value={liveMetrics.blocked} color="#f87171" />
               <StatCard label="Block rate" value={`${blockRate}%`} color="#fbbf24" />
               <StatCard label="Active rules" value={rules.length} color="#c084fc" />
             </div>
 
-            {/* Chart */}
             <div style={{ background: "#111", borderRadius: 12, padding: 24, border: "1px solid #1a1a1a" }}>
-              <div style={{ color: "#666", fontSize: 12, marginBottom: 16 }}>allowed vs blocked over time</div>
+              <div style={{ color: "#666", fontSize: 12, marginBottom: 16 }}>allowed vs blocked — websocket live</div>
               <ResponsiveContainer width="100%" height={220}>
                 <LineChart data={chartData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#1a1a1a" />
@@ -157,7 +187,6 @@ export default function App() {
 
         {tab === "rules" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-            {/* Existing rules */}
             <div style={{ background: "#111", borderRadius: 12, border: "1px solid #1a1a1a", overflow: "hidden" }}>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
@@ -180,23 +209,18 @@ export default function App() {
               </table>
             </div>
 
-            {/* Create rule form */}
             <div style={{ background: "#111", borderRadius: 12, border: "1px solid #1a1a1a", padding: 24 }}>
               <div style={{ color: "#666", fontSize: 12, marginBottom: 16 }}>create new rule</div>
               <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
-                {[
-                  { key: "endpoint", placeholder: "/api/products", label: "endpoint" },
-                ].map(f => (
-                  <div key={f.key} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    <label style={{ color: "#555", fontSize: 11 }}>{f.label}</label>
-                    <input
-                      value={newRule[f.key]}
-                      onChange={e => setNewRule(p => ({ ...p, [f.key]: e.target.value }))}
-                      placeholder={f.placeholder}
-                      style={{ background: "#0a0a0a", border: "1px solid #222", borderRadius: 6, padding: "8px 12px", color: "#fff", fontSize: 13, width: 200 }}
-                    />
-                  </div>
-                ))}
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <label style={{ color: "#555", fontSize: 11 }}>endpoint</label>
+                  <input
+                    value={newRule.endpoint}
+                    onChange={e => setNewRule(p => ({ ...p, endpoint: e.target.value }))}
+                    placeholder="/api/products"
+                    style={{ background: "#0a0a0a", border: "1px solid #222", borderRadius: 6, padding: "8px 12px", color: "#fff", fontSize: 13, width: 200 }}
+                  />
+                </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                   <label style={{ color: "#555", fontSize: 11 }}>algorithm</label>
                   <select value={newRule.algorithm} onChange={e => setNewRule(p => ({ ...p, algorithm: e.target.value }))}
@@ -205,10 +229,7 @@ export default function App() {
                     <option value="token_bucket">token_bucket</option>
                   </select>
                 </div>
-                {[
-                  { key: "limit", label: "limit" },
-                  { key: "window_seconds", label: "window (s)" },
-                ].map(f => (
+                {[{ key: "limit", label: "limit" }, { key: "window_seconds", label: "window (s)" }].map(f => (
                   <div key={f.key} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                     <label style={{ color: "#555", fontSize: 11 }}>{f.label}</label>
                     <input type="number" value={newRule[f.key]}

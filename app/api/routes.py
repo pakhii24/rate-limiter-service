@@ -1,3 +1,5 @@
+from app.db.postgres import AsyncSessionLocal
+import time
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -94,3 +96,33 @@ async def get_logs(
             "timestamp": l.timestamp,
         } for l in logs
     ]}
+
+from fastapi import WebSocket
+import asyncio
+
+connected_clients = set()
+
+@router.websocket("/ws/metrics")
+async def metrics_websocket(websocket: WebSocket):
+    await websocket.accept()
+    connected_clients.add(websocket)
+    try:
+        while True:
+            # Send live metrics every second
+            async with AsyncSessionLocal() as session:
+                from sqlalchemy import func
+                from app.db.models import RequestLog
+                
+                total = await session.execute(select(func.count(RequestLog.id)))
+                allowed = await session.execute(select(func.count(RequestLog.id)).where(RequestLog.allowed == True))
+                blocked = await session.execute(select(func.count(RequestLog.id)).where(RequestLog.allowed == False))
+                
+                await websocket.send_json({
+                    "total": total.scalar(),
+                    "allowed": allowed.scalar(),
+                    "blocked": blocked.scalar(),
+                    "timestamp": time.time()
+                })
+            await asyncio.sleep(1)
+    except Exception:
+        connected_clients.discard(websocket)
