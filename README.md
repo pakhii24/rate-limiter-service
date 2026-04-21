@@ -27,12 +27,15 @@ Client → FastAPI Service → Redis (allow/block decision, <1ms)
 
 ## Load Test Results (AWS EC2 t3.micro)
 
-| Users | Median | p95 | p99 | Failures |
-|-------|--------|-----|-----|----------|
-| 100   | 33ms   | 160ms | 740ms | 0% |
-| 500   | ~30s   | 31s | 31s | 0% |
+## Load Test Results (AWS EC2 t3.micro, 2 uvicorn workers)
 
-**Bottleneck at 500 users**: Single vCPU t3.micro saturated. Fix: multiple uvicorn workers + dedicated Redis instance.
+| Users | Median | p95 | RPS | Failures |
+|-------|--------|-----|-----|----------|
+| 100 (1 worker) | 33ms | 160ms | 2.87 | 0% |
+| 100 (2 workers) | 38ms | 31s | 8.77 | 0% |
+
+**Optimization**: Adding a second uvicorn worker increased RPS from 2.87 to 8.77 (3x improvement).
+**Bottleneck**: t3.micro single-box deployment — app, Redis, and Postgres compete for same CPU. Fix: dedicated Redis instance + horizontal scaling.
 
 ## Tech Stack
 - **Backend**: Python, FastAPI, Redis, PostgreSQL
